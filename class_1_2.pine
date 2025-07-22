@@ -1,0 +1,99 @@
+//@version=6
+// SCS v2.0 – Layer 1 & 2: Adaptive Trend Filter + Value Zone
+indicator("SCS: L1+L2 Combo", overlay=true, max_labels_count=500)
+
+// ======= INPUTS =======
+grp_l1 = "Lớp 1: Adaptive Trend"
+grp_l2 = "Lớp 2: BB Value Zone"
+grp_vis = "Hiển thị"
+
+// Lớp 1 – EMA/ATR Adaptive
+l1_ema_len       = input.int(200, "EMA Length", group=grp_l1)
+l1_price_src     = input.source(close, "Price Source", group=grp_l1)
+l1_use_atr_logic = input.bool(true,  "Use ATR Logic?", group=grp_l1)
+l1_atr_len       = input.int(14,    "ATR Length", group=grp_l1)
+l1_atr_mult      = input.float(1.5, "ATR Multiplier", step=0.1, group=grp_l1)
+l1_strong_mult   = input.float(1.005, "Fixed Multiplier (nếu tắt ATR)", step=0.001, group=grp_l1)
+
+// Lớp 2 – BB Value Zone
+l2_bb_len   = input.int(20,  "BB Period", group=grp_l2)
+l2_bb_src   = input.source(close, "BB Source", group=grp_l2)
+l2_bb_mult  = input.float(2.0, "BB StdDev Multiplier", group=grp_l2)
+
+// Ẩn/hiện ATR channel, show BB
+show_channel = input.bool(true, "Hiện kênh ATR (L1)?", group=grp_vis)
+show_bb      = input.bool(true, "Hiện Bollinger Bands (L2)?", group=grp_vis)
+
+// ============== LAYER 1 LOGIC ==============
+f_getLayer1_Score(price, ema_len, use_atr, atr_len, atr_mult, strong_mult) =>
+    ema_val = ta.ema(price, ema_len)
+    atr_val = ta.atr(atr_len)
+    upper_threshold = use_atr ? ema_val + atr_mult * atr_val : ema_val * strong_mult
+    lower_threshold = use_atr ? ema_val - atr_mult * atr_val : ema_val * (2 - strong_mult)
+    int score = 0
+    if price > upper_threshold
+        score := 35
+    else if price > ema_val
+        score := 15
+    else if price < lower_threshold
+        score := -35
+    else if price < ema_val
+        score := -15
+    else
+        score := 0
+    [score, ema_val, upper_threshold, lower_threshold]
+
+[score_L1, ema_200, upper_channel, lower_channel] = f_getLayer1_Score(l1_price_src, l1_ema_len, l1_use_atr_logic, l1_atr_len, l1_atr_mult, l1_strong_mult)
+
+// ============== LAYER 2 LOGIC - DỰA NGỮ CẢNH TREND ==============
+f_getLayer2_Score_Context(price, basis, upper, lower, trend_bias) =>
+    score = 0
+    // Uptrend được ưu tiên + điểm khi giá về BB dưới
+    if trend_bias >= 15
+        if price <= lower
+            score := 20
+        else if price < basis
+            score := 10
+        else
+            score := 0
+    // Downtrend được ưu tiên – điểm khi giá về BB trên
+    else if trend_bias <= -15
+        if price >= upper
+            score := -20
+        else if price > basis
+            score := -10
+        else
+            score := 0
+    // No trend clear, không cộng điểm
+    else
+        score := 0
+    score
+
+basis  = ta.sma(l2_bb_src, l2_bb_len)
+dev    = l2_bb_mult * ta.stdev(l2_bb_src, l2_bb_len)
+upper  = basis + dev
+lower  = basis - dev
+score_L2 = f_getLayer2_Score_Context(l2_bb_src, basis, upper, lower, score_L1)
+
+// ============== PLOT MỌI LỚP & KÊNH ==============
+plot(ema_200, "EMA Trend (L1)", color=color.orange, linewidth=2)
+upper_plot = plot(l1_use_atr_logic and show_channel ? upper_channel : na, "Upper Channel", color=color.aqua, style=plot.style_stepline)
+lower_plot = plot(l1_use_atr_logic and show_channel ? lower_channel : na, "Lower Channel", color=color.aqua, style=plot.style_stepline)
+fill(upper_plot, lower_plot, color=color.new(color.aqua, 93), title="ATR Channel")
+
+p_basis = plot(show_bb ? basis : na, "BB Basis (L2)", color=color.blue, linewidth=2)
+p_upper = plot(show_bb ? upper : na, "BB Upper", color=color.gray, linewidth=1)
+p_lower = plot(show_bb ? lower : na, "BB Lower", color=color.gray, linewidth=1)
+fill(p_upper, p_lower, color=color.new(color.gray, 90), title="BB Fill Band")
+
+// ============== DATA WINDOW ==============
+plot(score_L1, title="SCS L1 Score", color=color.new(color.white, 100), display=display.data_window)
+plot(score_L2, title="SCS L2 Score", color=color.new(color.white, 100), display=display.data_window)
+
+// ============== LABEL CUỐI CHART ==============
+highestPrice = ta.highest(high, 20)
+if barstate.islast
+    l1_text = score_L1 == 35 ? "Tăng Mạnh" : score_L1 == 15 ? "Tăng" : score_L1 == -15 ? "Giảm" : score_L1 == -35 ? "Giảm Mạnh" : "Đi Ngang"
+    l2_text = score_L2 == 20 ? "Pullback sâu (mua)" : score_L2 == 10 ? "Pullback nhẹ" : score_L2 == -10 ? "Pullback giảm (bán)" : score_L2 == -20 ? "Rally cực mạnh (bán)" : "Không ưu tiên"
+    label_bg = score_L1 > 0 ? color.new(color.green, 30) : score_L1 < 0 ? color.new(color.red, 30) : color.new(color.gray, 30)
+    label.new(bar_index, highestPrice,text = "L1: " + str.tostring(score_L1) + " (" + l1_text + ")" +"\nL2: " + str.tostring(score_L2) + " (" + l2_text + ")" +"\nTổng SCS: " + str.tostring(score_L1 + score_L2),style = label.style_label_down,color = label_bg,textcolor = color.white,yloc = yloc.price,size = size.large)
