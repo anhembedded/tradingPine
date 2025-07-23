@@ -1,0 +1,102 @@
+//@version=5
+// -----------------------------------------------------------------------------
+// Module:      SCS v2.0 - L4 S/R Algorithm Checker (v2.1 - Syntax Fix)
+// Author:      Gemini & Trần Hoàng Anh
+// Date:        23/07/2025
+//
+// Mục tiêu:    Kiểm tra và trực quan hóa thuật toán xác định các ngưỡng S/R
+//              đa cấp (Ngày & Tuần) và các "Vùng Lân Cận" (Proximity Zones)
+//              dựa trên ATR, với bảng màu được tối ưu hóa.
+// -----------------------------------------------------------------------------
+indicator("S/R Multi-Level Algorithm Checker", shorttitle="S/R Checker", overlay=true)
+
+// -----------------------------------------------------------------------------
+// I. INPUTS
+// -----------------------------------------------------------------------------
+grp_sr = "S/R Settings"
+atr_len = input.int(14, "ATR Length for Proximity", group=grp_sr)
+proximity_mult = input.float(0.5, "Proximity Multiplier (x ATR)", group=grp_sr, tooltip="Hệ số nhân với ATR để xác định độ rộng của vùng lân cận.")
+
+// -----------------------------------------------------------------------------
+// II. ALGORITHM IMPLEMENTATION
+// -----------------------------------------------------------------------------
+
+// --- Step 1: Lấy dữ liệu từ các khung thời gian cao hơn ---
+// Dữ liệu Ngày (Daily)
+[d_high, d_low, d_close] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+// Dữ liệu Tuần (Weekly)
+[w_high, w_low, w_close] = request.security(syminfo.tickerid, "W", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+
+// --- Step 2: Tính toán các mức Pivot Points ---
+// Pivots Ngày
+d_p = (d_high + d_low + d_close) / 3
+d_r1 = 2 * d_p - d_low
+d_s1 = 2 * d_p - d_high
+d_r2 = d_p + (d_high - d_low)
+d_s2 = d_p - (d_high - d_low)
+
+// Pivots Tuần
+w_p = (w_high + w_low + w_close) / 3
+w_r1 = 2 * w_p - w_low
+w_s1 = 2 * w_p - w_high
+w_r2 = w_p + (w_high - w_low)
+w_s2 = w_p - (w_high - w_low)
+
+// --- Step 3: Tính toán "Vùng Lân Cận" ---
+atr_val = ta.atr(atr_len)
+proximity_zone = atr_val * proximity_mult
+
+// -----------------------------------------------------------------------------
+// III. VISUALIZATION
+// -----------------------------------------------------------------------------
+
+// --- Bảng màu mới ---
+color_weekly_res = color.new(#ff5252, 0) // Đỏ đậm cho Kháng cự Tuần
+color_weekly_sup = color.new(#2962ff, 0) // Xanh dương đậm cho Hỗ trợ Tuần
+color_weekly_piv = color.new(color.yellow, 0) // Vàng cho Pivot Tuần
+
+color_daily_res = color.new(#ff8a80, 40) // Đỏ nhạt cho Kháng cự Ngày
+color_daily_sup = color.new(#82b1ff, 40) // Xanh dương nhạt cho Hỗ trợ Ngày
+color_daily_piv = color.new(color.gray, 50)  // Xám cho Pivot Ngày
+
+color_zone_res = color.new(color.red, 94)     // Nền vùng kháng cự, rất mờ
+color_zone_sup = color.new(color.green, 94)   // Nền vùng hỗ trợ, rất mờ
+
+
+// --- Vẽ các mức S/R ---
+// Ngưỡng Tuần (Nét liền, dày hơn - Quan trọng nhất)
+plot(w_r2, "Weekly R2", color=color_weekly_res, style=plot.style_linebr, linewidth=2)
+plot(w_r1, "Weekly R1", color=color_weekly_res, style=plot.style_linebr, linewidth=2)
+plot(w_p, "Weekly Pivot", color=color_weekly_piv, style=plot.style_linebr, linewidth=2)
+plot(w_s1, "Weekly S1", color=color_weekly_sup, style=plot.style_linebr, linewidth=2)
+plot(w_s2, "Weekly S2", color=color_weekly_sup, style=plot.style_linebr, linewidth=2)
+
+// Ngưỡng Ngày (Chiến thuật - Mỏng hơn, trong suốt hơn)
+// [FIXED] Đã loại bỏ tham số 'linestyle' không hợp lệ.
+plot(d_r2, "Daily R2", color=color_daily_res, style=plot.style_linebr)
+plot(d_r1, "Daily R1", color=color_daily_res, style=plot.style_linebr)
+plot(d_p, "Daily Pivot", color=color_daily_piv, style=plot.style_linebr)
+plot(d_s1, "Daily S1", color=color_daily_sup, style=plot.style_linebr)
+plot(d_s2, "Daily S2", color=color_daily_sup, style=plot.style_linebr)
+
+
+// --- Vẽ các "Vùng Lân Cận" ---
+// Vùng quanh các ngưỡng Kháng cự Tuần
+r1_upper_w = plot(w_r1 + proximity_zone, "WR1 Upper Zone", color=na)
+r1_lower_w = plot(w_r1 - proximity_zone, "WR1 Lower Zone", color=na)
+fill(r1_upper_w, r1_lower_w, color=color_zone_res, title="Weekly R1 Proximity Zone")
+
+// Vùng quanh các ngưỡng Hỗ trợ Tuần
+s1_upper_w = plot(w_s1 + proximity_zone, "WS1 Upper Zone", color=na)
+s1_lower_w = plot(w_s1 - proximity_zone, "WS1 Lower Zone", color=na)
+fill(s1_upper_w, s1_lower_w, color=color_zone_sup, title="Weekly S1 Proximity Zone")
+
+// Vùng quanh các ngưỡng Kháng cự Ngày
+r1_upper_d = plot(d_r1 + proximity_zone, "DR1 Upper Zone", color=na)
+r1_lower_d = plot(d_r1 - proximity_zone, "DR1 Lower Zone", color=na)
+fill(r1_upper_d, r1_lower_d, color=color_zone_res, title="Daily R1 Proximity Zone")
+
+// Vùng quanh các ngưỡng Hỗ trợ Ngày
+s1_upper_d = plot(d_s1 + proximity_zone, "DS1 Upper Zone", color=na)
+s1_lower_d = plot(d_s1 - proximity_zone, "DS1 Lower Zone", color=na)
+fill(s1_upper_d, s1_lower_d, color=color_zone_sup, title="Daily S1 Proximity Zone")

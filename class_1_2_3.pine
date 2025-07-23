@@ -1,0 +1,200 @@
+//@version=6
+// -----------------------------------------------------------------------------
+// TECHNICAL SPEC IMPLEMENTATION
+//
+// Module:      SCS v2.0 - Layer 1, 2 & 3 Combined
+// Spec Version: L1 v3.3 + L2 v2.0 + L3 v2.0
+// Author:      Gemini & Trần Hoàng Anh
+// Date:        23/07/2025
+//
+// -----------------------------------------------------------------------------
+indicator("SCS - Layer 1, 2 & 3 Combined", shorttitle="SCS-L1+2+3", overlay=true, precision=2)
+
+// -----------------------------------------------------------------------------
+// Section 1: INPUTS
+// -----------------------------------------------------------------------------
+// --- Layer 1 Inputs ---
+grp_l1 = "Layer 1: Macro Trend Settings"
+l1_ema_len    = input.int(200, "EMA Length", minval=1, group=grp_l1)
+l1_price_src  = input.source(close, "Price Source", group=grp_l1)
+l1_use_atr_logic = input.bool(true, "Use ATR Logic?", group=grp_l1, tooltip="Bật để dùng ngưỡng động theo ATR. Tắt để dùng ngưỡng cố định theo Multiplier.")
+l1_atr_len    = input.int(14, "ATR Length", group=grp_l1)
+l1_atr_mult   = input.float(1.5, "ATR Multiplier", group=grp_l1, step=0.1)
+l1_strong_mult = input.float(1.005, "Fixed Multiplier", group=grp_l1, step=0.001)
+
+// --- Layer 2 Inputs ---
+grp_l2 = "Layer 2: Trade Setup Zone Settings"
+l2_bb_len     = input.int(30, "BB Period", minval=1, group=grp_l2)
+l2_bb_src     = input.source(close, "BB Source", group=grp_l2)
+l2_bb_mult    = input.float(2.0, "BB StdDev Multiplier", minval=0.001, maxval=50, step=0.1, group=grp_l2)
+l2_ma_type    = input.string("SMA", "BB Basis MA Type", options=["SMA", "EMA"], group=grp_l2)
+l2_vol_ma_len = input.int(20, "Volume MA Length", group=grp_l2)
+l2_vol_mult   = input.float(1.5, "Breakout Vol Multiplier", group=grp_l2, step=0.1)
+
+// --- Layer 3 Inputs ---
+grp_l3 = "Layer 3: Trigger Confirmation Settings"
+l3_rsi_len = input.int(14, "RSI Length", group=grp_l3)
+l3_rsi_src = input.source(close, "RSI Source", group=grp_l3)
+l3_rsi_buy_level = input.int(51, "RSI Buy Level (>)", group=grp_l3)
+l3_rsi_sell_level = input.int(49, "RSI Sell Level (<)", group=grp_l3)
+l3_macd_fast_len = input.int(12, "MACD Fast Length", group=grp_l3)
+l3_macd_slow_len = input.int(26, "MACD Slow Length", group=grp_l3)
+l3_macd_signal_len = input.int(9, "MACD Signal Length", group=grp_l3)
+
+// --- Visual Inputs ---
+grp_vis = "Visual Settings"
+show_channel = input.bool(true, "Show ATR Channel?", group=grp_vis, tooltip="Hiển thị kênh biến động ATR trên biểu đồ.")
+score_ema_len = input.int(3, "EMA of Total Score Length", group=grp_vis, minval=1, tooltip="Chu kỳ EMA để làm mượt điểm Total Score trong Data Window.")
+
+// -----------------------------------------------------------------------------
+// Section 2: LOGIC FUNCTIONS
+// -----------------------------------------------------------------------------
+// --- Layer 1 Function ---
+f_getLayer1_Score(price, ema_len, use_atr, atr_len, atr_mult, strong_mult) =>
+    ema_val = ta.ema(price, ema_len)
+    float upper_threshold = na, float lower_threshold = na
+    if use_atr
+        atr_val = ta.atr(atr_len)
+        upper_threshold := ema_val + (atr_mult * atr_val)
+        lower_threshold := ema_val - (atr_mult * atr_val)
+    else
+        upper_threshold := ema_val * strong_mult
+        lower_threshold := ema_val * (2 - strong_mult)
+    int score = 0 
+    if price > upper_threshold
+        score := 35
+    else if price > ema_val
+        score := 15
+    else if price < lower_threshold
+        score := -35
+    else if price < ema_val
+        score := -15
+    [score, ema_val, upper_threshold, lower_threshold]
+
+// --- Layer 2 Function ---
+f_getLayer2_Score_Adaptive(price, bb_len, bb_mult, ma_type, score_L1, vol_ma_len, vol_mult) =>
+    float basis = ma_type == "SMA" ? ta.sma(price, bb_len) : ta.ema(price, bb_len)
+    dev = bb_mult * ta.stdev(price, bb_len)
+    upper = basis + dev
+    lower = basis - dev
+    bb_width = (upper - lower) / basis
+    vol_sma = ta.sma(volume, vol_ma_len)
+    isSqueeze = bb_width < ta.lowest(bb_width, 120) * 1.1
+    isBreakoutVolume = volume > (vol_mult * vol_sma)
+    int score = 0
+    if isSqueeze and isBreakoutVolume
+        if price > upper
+            score := 15
+        else if price < lower
+            score := -15
+    else if score_L1 == 35 and price > basis
+        score := 5
+    else if score_L1 == -35 and price < basis
+        score := -5
+    else
+        isRejectionCandleUp = price <= lower and close > (high + low) / 2
+        isTrapCandleUp = price <= lower and not isRejectionCandleUp
+        isRejectionCandleDown = price >= upper and close < (high + low) / 2
+        isTrapCandleDown = price >= upper and not isRejectionCandleDown
+        if isRejectionCandleUp
+            score := 20
+        else if isTrapCandleUp
+            score := 0
+        else if price < basis
+            score := 10
+        else if isRejectionCandleDown
+            score := -20
+        else if isTrapCandleDown
+            score := 0
+        else if price > basis
+            score := -10
+    [score, basis, upper, lower]
+
+// --- Layer 3 Function ---
+f_getLayer3_Score(rsi_src, rsi_len, rsi_buy_lvl, rsi_sell_lvl, macd_fast, macd_slow, macd_signal, vol_ma_len) =>
+    rsi_val = ta.rsi(rsi_src, rsi_len)
+    [_, _, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+    vol_sma = ta.sma(volume, vol_ma_len)
+    int rsi_score = 0
+    if ta.crossunder(rsi_val, rsi_sell_lvl)
+        rsi_score := -15
+    else if ta.crossover(rsi_val, rsi_buy_lvl)
+        rsi_score := 15
+    else if rsi_val < rsi_sell_lvl and rsi_val < rsi_val[1]
+        rsi_score := -10
+    else if rsi_val > rsi_buy_lvl and rsi_val > rsi_val[1]
+        rsi_score := 10
+    int macd_score = 0
+    if ta.crossunder(macd_hist, 0)
+        macd_score := -15
+    else if ta.crossover(macd_hist, 0)
+        macd_score := 15
+    else if macd_hist < 0 and macd_hist < macd_hist[1]
+        macd_score := -10
+    else if macd_hist > 0 and macd_hist > macd_hist[1]
+        macd_score := 10
+    int vol_score = 0
+    is_bullish_candle = close > open
+    is_bearish_candle = close < open
+    if volume > 2.0 * vol_sma
+        vol_score := is_bullish_candle ? 15 : is_bearish_candle ? -15 : 0
+    else if volume > 1.5 * vol_sma
+        vol_score := is_bullish_candle ? 10 : is_bearish_candle ? -10 : 0
+    else if volume < vol_sma
+        vol_score := is_bullish_candle ? -10 : is_bearish_candle ? 10 : 0
+    total_score_l3 = rsi_score + macd_score + vol_score
+    [total_score_l3, rsi_score, macd_score, vol_score]
+
+// -----------------------------------------------------------------------------
+// Section 3: CALCULATIONS & PLOTTING
+// -----------------------------------------------------------------------------
+// --- Calculate Scores ---
+[score_L1, ema_200_val, upper_channel_val, lower_channel_val] = f_getLayer1_Score(l1_price_src, l1_ema_len, l1_use_atr_logic, l1_atr_len, l1_atr_mult, l1_strong_mult)
+[score_L2, basis_val, upper_val, lower_val] = f_getLayer2_Score_Adaptive(l2_bb_src, l2_bb_len, l2_bb_mult, l2_ma_type, score_L1, l2_vol_ma_len, l2_vol_mult)
+[score_L3, s_rsi, s_macd, s_vol] = f_getLayer3_Score(l3_rsi_src, l3_rsi_len, l3_rsi_buy_level, l3_rsi_sell_level, l3_macd_fast_len, l3_macd_slow_len, l3_macd_signal_len, l2_vol_ma_len)
+
+total_score = score_L1 + score_L2 + score_L3
+
+// [NEW] Calculate EMA of the Total Score
+total_score_ema = ta.ema(total_score, score_ema_len)
+
+// --- Visual Outputs on Main Chart ---
+// 1. Plot Layer 1 & 2 Indicators
+plot(ema_200_val, "EMA Long Term", color=color.new(color.orange, 0), linewidth=2)
+upper_plot = plot(l1_use_atr_logic and show_channel ? upper_channel_val : na, "Upper Channel", color=color.new(color.aqua, 50), style=plot.style_stepline)
+lower_plot = plot(l1_use_atr_logic and show_channel ? lower_channel_val : na, "Lower Channel", color=color.new(color.aqua, 50), style=plot.style_stepline)
+fill(upper_plot, lower_plot, color=color.new(color.aqua, 90), title="ATR Channel Fill")
+plot_basis = plot(basis_val, "BB Basis", color=color.new(color.blue, 0), linewidth=1)
+plot_upper = plot(upper_val, "BB Upper", color=color.new(color.gray, 50), linewidth=1)
+plot_lower = plot(lower_val, "BB Lower", color=color.new(color.gray, 50), linewidth=1)
+fill(plot_upper, plot_lower, color=color.new(color.gray, 92), title="BB Fill")
+
+// 2. Display the score
+// Data Window Display for Historical Analysis
+plot(score_L1, "SCS L1 Score", display=display.data_window)
+plot(score_L2, "SCS L2 Score", display=display.data_window)
+plot(score_L3, "SCS L3 Score (Tổng)", display=display.data_window)
+plot(s_rsi, "  L3 - RSI Score", display=display.data_window)
+plot(s_macd, "  L3 - MACD Score", display=display.data_window)
+plot(s_vol, "  L3 - Volume Score", display=display.data_window)
+plot(total_score, "Total Score", display=display.data_window)
+plot(total_score_ema, "Total Score EMA", display=display.data_window) // [NEW]
+
+// Real-time Monitoring Label
+var label scoreLabel = na
+label.delete(scoreLabel) 
+
+if barstate.islast
+    label_text = "SCS L1 (Xu hướng): " + str.tostring(score_L1) + 
+                 "\nSCS L2 (Thiết lập): " + str.tostring(score_L2) + 
+                 "\nSCS L3 (Kích hoạt): " + str.tostring(score_L3) +
+                 "\n  (RSI:" + str.tostring(s_rsi) + ", MACD:" + str.tostring(s_macd) + ", Vol:" + str.tostring(s_vol) + ")" +
+                 "\n----------------------" +
+                 "\nTổng Điểm: " + str.tostring(total_score) +
+                 "\nEMA(" + str.tostring(score_ema_len) + ") Điểm: " + str.tostring(total_score_ema) // [NEW]
+    
+    label_bgcolor = total_score > 49 ? color.new(color.green, 30) : total_score < -49 ? color.new(color.red, 30) : color.new(color.gray, 30)
+    
+    scoreLabel := label.new(bar_index, ta.highest(high, 20), text=label_text, 
+                          color=label_bgcolor, textcolor=color.white, 
+                          style=label.style_label_down, yloc=yloc.price, size=size.normal)
