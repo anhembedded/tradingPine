@@ -1,9 +1,9 @@
-//@version=6
+//@version=5
 // -----------------------------------------------------------------------------
 // TECHNICAL SPEC IMPLEMENTATION
 //
 // Module:      SCS v2.0 - Layer 1, 2, 3 & 4 Combined
-// Spec Version: L1 v3.3 + L2 v2.0 + L3 v3.0 + L4 v2.0
+// Spec Version: L1 v3.3 + L2 v2.0 + L3 v3.0 + L4 v2.0 (v1.2 - Syntax Fix)
 // Author:      Gemini & Trần Hoàng Anh
 // Date:        23/07/2025
 //
@@ -171,7 +171,7 @@ f_getLayer3_Score_Adaptive(score_L1, rsi_src, rsi_len, macd_fast, macd_slow, mac
     
     // Step 4: Tổng hợp và trả về kết quả
     total_score_l3 = rsi_score + macd_score + vol_score
-    [total_score_l3, rsi_score, macd_score, vol_score]
+    [total_score_l3, rsi_score, macd_score, vol_score, rsi_buy_lvl, rsi_sell_lvl]
 
 // --- Layer 4 Function ---
 f_getLayer4_Score(price, atr_len, proximity_mult, daily_mult, weekly_mult, likely_direction) =>
@@ -237,10 +237,9 @@ f_getLayer4_Score(price, atr_len, proximity_mult, daily_mult, weekly_mult, likel
 // Section 3: CALCULATIONS & PLOTTING
 // -----------------------------------------------------------------------------
 // --- Calculate Scores ---
-[score_L1, ema_200_val, upper_channel_val, lower_channel_val] = f_getLayer1_Score(l1_price_src, l1_ema_len, l1_use_atr_logic, l1_atr_len, l1_atr_mult, l1_strong_mult)
+[score_L1, ema_val_L1, upper_channel_val, lower_channel_val] = f_getLayer1_Score(l1_price_src, l1_ema_len, l1_use_atr_logic, l1_atr_len, l1_atr_mult, l1_strong_mult)
 [score_L2, basis_val, upper_val, lower_val] = f_getLayer2_Score_Adaptive(l2_bb_src, l2_bb_len, l2_bb_mult, l2_ma_type, score_L1, l2_vol_ma_len, l2_vol_mult)
-// [UPDATED] Pass score_L1 to the L3 function
-[score_L3, s_rsi, s_macd, s_vol] = f_getLayer3_Score_Adaptive(score_L1, l3_rsi_src, l3_rsi_len, l3_macd_fast_len, l3_macd_slow_len, l3_macd_signal_len, l2_vol_ma_len)
+[score_L3, s_rsi, s_macd, s_vol, rsi_buy_dynamic, rsi_sell_dynamic] = f_getLayer3_Score_Adaptive(score_L1, l3_rsi_src, l3_rsi_len, l3_macd_fast_len, l3_macd_slow_len, l3_macd_signal_len, l2_vol_ma_len)
 likely_direction = score_L1 > 0 ? 1 : score_L1 < 0 ? -1 : 0
 [score_L4, d_p, d_r1, d_s1, d_r2, d_s2, w_p, w_r1, w_s1, w_r2, w_s2] = f_getLayer4_Score(close, l4_atr_len, l4_proximity_mult, l4_daily_pivot_mult, l4_weekly_pivot_mult, likely_direction)
 
@@ -248,22 +247,28 @@ total_score = score_L1 + score_L2 + score_L3 + score_L4
 
 // --- Visual Outputs on Main Chart ---
 // 1. Plot Layer 1 & 2 Indicators
-plot(ema_200_val, "EMA Main Trend", color=color.new(color.orange, 0), linewidth=2)
-upper_plot = plot(l1_use_atr_logic and show_channel ? upper_channel_val : na, "Upper Channel", color=color.new(color.aqua, 90))
-lower_plot = plot(l1_use_atr_logic and show_channel ? lower_channel_val : na, "Lower Channel", color=color.new(color.aqua, 90))
-fill(upper_plot, lower_plot, color=color.new(color.aqua, 95), title="ATR Channel Fill")
-plot_basis = plot(basis_val, "BB Basis", color=color.new(color.blue, 0), linewidth=1)
-plot_upper = plot(upper_val, "BB Upper", color=color.new(color.gray, 50), linewidth=1)
-plot_lower = plot(lower_val, "BB Lower", color=color.new(color.gray, 50), linewidth=1)
-fill(plot_upper, plot_lower, color=color.new(color.gray, 92), title="BB Fill")
+plot(ema_val_L1, "EMA Main Trend", color=color.new(#ff9800, 0), linewidth=2) // Cam đậm
+upper_plot = plot(l1_use_atr_logic and show_channel ? upper_channel_val : na, "Upper Channel", color=color.new(#9c27b0, 80), style=plot.style_circles, linewidth=1) // Tím nhạt, chấm tròn
+lower_plot = plot(l1_use_atr_logic and show_channel ? lower_channel_val : na, "Lower Channel", color=color.new(#9c27b0, 80), style=plot.style_circles, linewidth=1) // Tím nhạt, chấm tròn
+fill(upper_plot, lower_plot, color=color.new(#9c27b0, 95), title="ATR Channel Fill") // Nền tím rất mờ
+
+plot_basis = plot(basis_val, "BB Basis", color=color.new(#2196f3, 0), linewidth=2) // Xanh dương đậm, dày
+plot_upper = plot(upper_val, "BB Upper", color=color.new(color.gray, 70), linewidth=1) // Xám nhạt
+plot_lower = plot(lower_val, "BB Lower", color=color.new(color.gray, 70), linewidth=1) // Xám nhạt
+fill(plot_upper, plot_lower, color=color.new(color.gray, 95), title="BB Fill") // Nền xám rất mờ
 
 // 2. Plot Layer 4 Indicators
-plot(show_pivots ? d_p : na, "Daily Pivot", color=color.new(color.gray, 40), style=plot.style_linebr)
-plot(show_pivots ? d_s1 : na, "Daily S1", color=color.new(color.green, 40), style=plot.style_linebr)
-plot(show_pivots ? d_r1 : na, "Daily R1", color=color.new(color.red, 40), style=plot.style_linebr)
+// Weekly Pivots (Solid, Thicker - Quan trọng nhất)
 plot(show_pivots ? w_p : na, "Weekly Pivot", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
-plot(show_pivots ? w_s1 : na, "Weekly S1", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
-plot(show_pivots ? w_r1 : na, "Weekly R1", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(show_pivots ? w_s1 : na, "Weekly S1", color=color.new(#4caf50, 0), style=plot.style_linebr, linewidth=2) // Xanh lá cây đậm
+plot(show_pivots ? w_r1 : na, "Weekly R1", color=color.new(#f44336, 0), style=plot.style_linebr, linewidth=2) // Đỏ đậm
+
+// Daily Pivots (Dashed, Thinner - Chiến thuật)
+// [FIXED] Removed invalid 'linestyle' argument. Differentiation is now by color and linewidth.
+plot(show_pivots ? d_p : na, "Daily Pivot", color=color.new(color.gray, 30), style=plot.style_linebr)
+plot(show_pivots ? d_s1 : na, "Daily S1", color=color.new(#a5d6a7, 30), style=plot.style_linebr) // Xanh lá cây nhạt
+plot(show_pivots ? d_r1 : na, "Daily R1", color=color.new(#ef9a9a, 30), style=plot.style_linebr) // Đỏ nhạt
+
 
 // 3. Display the score in Data Window
 plot(score_L1, "SCS L1 Score", display=display.data_window)
@@ -272,6 +277,8 @@ plot(score_L3, "SCS L3 Score (Tổng)", display=display.data_window)
 plot(s_rsi, "  L3 - RSI Score", display=display.data_window)
 plot(s_macd, "  L3 - MACD Score", display=display.data_window)
 plot(s_vol, "  L3 - Volume Score", display=display.data_window)
+plot(rsi_buy_dynamic, "  L3 - RSI Buy Threshold", display=display.data_window)
+plot(rsi_sell_dynamic, "  L3 - RSI Sell Threshold", display=display.data_window)
 plot(score_L4, "SCS L4 Score", display=display.data_window)
 plot(total_score, "Total Score", display=display.data_window)
 
@@ -288,7 +295,8 @@ if barstate.islast
                  "\n----------------------" +
                  "\nTổng Điểm: " + str.tostring(total_score)
     
-    label_bgcolor = total_score > 69 ? color.new(color.green, 30) : total_score < -69 ? color.new(color.red, 30) : color.new(color.gray, 30)
+    label_bgcolor = total_score > 69 ? color.new(color.green, 30) : 
+                    total_score < -69 ? color.new(color.red, 30) : color.new(color.gray, 30)
     
     scoreLabel := label.new(bar_index, ta.highest(high, 20), text=label_text, 
                           color=label_bgcolor, textcolor=color.white, 
